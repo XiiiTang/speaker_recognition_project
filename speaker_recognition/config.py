@@ -12,7 +12,7 @@ class Config:
     
     # ==================== 数据路径配置 ====================
     # VoxCeleb2数据集根目录路径
-    VOXCELEB_PATH = r"H:\算法分析与设计\VOX2"
+    VOXCELEB_PATH = r"H:\speaker_recognition_project\data"
     
     # 项目根目录
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
