@@ -64,7 +64,7 @@ class Config:
     
     # ==================== GMM模型参数 ====================
     # GMM高斯混合分量数
-    GMM_N_COMPONENTS = 256
+    GMM_N_COMPONENTS = 32  # 降低组件数量以适应小数据集
     
     # GMM协方差类型
     GMM_COVARIANCE_TYPE = 'diag'

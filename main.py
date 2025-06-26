@@ -10,6 +10,7 @@ import sys
 import argparse
 import time
 from typing import Dict, List, Tuple
+from tqdm import tqdm
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -92,17 +93,34 @@ def enroll_speakers(model, enroll_files: Dict[str, List[str]], model_type: str):
     print(f"\n{'='*50}")
     print(f"开始注册说话人 ({model_type.upper()} 模型)")
     print(f"{'='*50}")
-    
+
     start_time = time.time()
-    
-    for speaker_id, files in enroll_files.items():
-        print(f"正在注册说话人: {speaker_id}")
-        model.enroll(speaker_id, files)
-    
+    total_speakers = len(enroll_files)
+    total_files = sum(len(files) for files in enroll_files.values())
+
+    print(f"需要注册 {total_speakers} 个说话人，共 {total_files} 个文件")
+
+    # 使用tqdm显示注册进度
+    with tqdm(enroll_files.items(), desc=f"注册说话人({model_type.upper()})",
+              unit="说话人", ncols=100) as pbar:
+
+        for speaker_id, files in pbar:
+            # 更新进度条描述
+            pbar.set_postfix({
+                '当前说话人': speaker_id[:10] + '...' if len(speaker_id) > 10 else speaker_id,
+                '文件数': len(files)
+            })
+
+            try:
+                model.enroll(speaker_id, files)
+            except Exception as e:
+                tqdm.write(f"警告: 注册说话人 {speaker_id} 失败: {e}")
+                continue
+
     enrollment_time = time.time() - start_time
     print(f"\n说话人注册完成，共注册 {len(enroll_files)} 个说话人")
     print(f"注册耗时: {enrollment_time:.2f} 秒")
-    
+
     return model
 
 
@@ -119,29 +137,38 @@ def test_model(model, test_files: Dict[str, List[str]],
     imposter_scores = []
     
     start_time = time.time()
-    total_tests = sum(len(files) for files in test_files.values())
-    current_test = 0
-    
-    # 对每个测试文件进行识别
+
+    # 创建所有测试文件的列表，用于进度条
+    all_test_files = []
     for true_speaker_id, files in test_files.items():
         for file_path in files:
-            current_test += 1
-            
-            if current_test % 10 == 0:
-                print(f"进度: {current_test}/{total_tests} "
-                      f"({current_test/total_tests*100:.1f}%)")
-            
+            all_test_files.append((true_speaker_id, file_path))
+
+    total_tests = len(all_test_files)
+    print(f"总共需要测试 {total_tests} 个文件")
+
+    # 使用tqdm显示进度条
+    with tqdm(all_test_files, desc=f"测试{model_type.upper()}模型",
+              unit="文件", ncols=100) as pbar:
+
+        for true_speaker_id, file_path in pbar:
+            # 更新进度条描述
+            pbar.set_postfix({
+                '当前说话人': true_speaker_id[:8] + '...' if len(true_speaker_id) > 8 else true_speaker_id,
+                '已完成': f"{len(true_labels)}/{total_tests}"
+            })
+
             try:
                 # 识别说话人
                 predicted_speaker_id, score = model.identify(file_path)
-                
+
                 true_labels.append(true_speaker_id)
                 predicted_labels.append(predicted_speaker_id)
-                
+
                 # 计算目标分数和冒名者分数
                 target_score = model.get_speaker_score(file_path, true_speaker_id)
                 target_scores.append(target_score)
-                
+
                 # 随机选择一个其他说话人作为冒名者
                 other_speakers = [sid for sid in test_files.keys() if sid != true_speaker_id]
                 if other_speakers:
@@ -149,9 +176,10 @@ def test_model(model, test_files: Dict[str, List[str]],
                     imposter_id = random.choice(other_speakers)
                     imposter_score = model.get_speaker_score(file_path, imposter_id)
                     imposter_scores.append(imposter_score)
-                
+
             except Exception as e:
-                print(f"警告: 测试文件 {file_path} 失败: {e}")
+                # 使用tqdm.write来在进度条下方显示警告信息
+                tqdm.write(f"警告: 测试文件失败 {os.path.basename(file_path)}: {e}")
                 continue
     
     test_time = time.time() - start_time
@@ -181,62 +209,86 @@ def save_results(results: Dict, output_dir: str, model_type: str):
 def main():
     """主函数"""
     args = parse_arguments()
-    
+
     # 设置详细日志
     if args.verbose:
         config.VERBOSE = True
-    
+
     # 验证数据路径
     data_path = args.data_path or config.VOXCELEB_PATH
     if not config.validate_paths():
         print(f"警告: 数据集路径可能不存在: {data_path}")
         print("请检查配置文件中的VOXCELEB_PATH设置")
-    
+
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
-    
-    print("声纹识别系统启动")
-    print(f"模型类型: {args.model.upper()}")
-    print(f"运行模式: {args.mode}")
-    print(f"数据路径: {data_path}")
-    
+
+    print("🎯 声纹识别系统启动")
+    print(f"📊 模型类型: {args.model.upper()}")
+    print(f"🔧 运行模式: {args.mode}")
+    print(f"📁 数据路径: {data_path}")
+    print(f"💾 输出目录: {args.output_dir}")
+
     # 创建模型
     model = create_model(args.model)
-    print(f"模型创建成功: {model}")
+    print(f"✅ 模型创建成功: {model}")
+
+    # 计算总步骤数
+    total_steps = 0
+    if args.mode in ['train', 'full']:
+        total_steps += 3  # 数据加载、训练、注册
+    if args.mode in ['test', 'full']:
+        total_steps += 2  # 测试、评估
+
+    current_step = 0
     
     # 加载数据集
     if args.mode in ['train', 'full']:
-        print("\n正在加载和划分数据集...")
+        current_step += 1
+        print(f"\n📂 步骤 {current_step}/{total_steps}: 加载和划分数据集")
         global_train_files, enroll_files, test_files = get_dataset_split(data_path)
     
     # 训练阶段
     if args.mode in ['train', 'full']:
         if args.load_model:
-            print(f"加载预训练模型: {args.load_model}")
+            current_step += 1
+            print(f"\n🔄 步骤 {current_step}/{total_steps}: 加载预训练模型")
+            print(f"从 {args.load_model} 加载模型...")
             model.load(args.load_model)
         else:
+            current_step += 1
+            print(f"\n🏋️ 步骤 {current_step}/{total_steps}: 训练模型")
             model = train_model(model, global_train_files, args.model, args.save_model)
-        
+
         # 注册说话人
+        current_step += 1
+        print(f"\n👥 步骤 {current_step}/{total_steps}: 注册说话人")
         model = enroll_speakers(model, enroll_files, args.model)
     
     # 测试阶段
     if args.mode in ['test', 'full']:
         if args.mode == 'test' and args.load_model:
-            print(f"加载训练好的模型: {args.load_model}")
+            current_step += 1
+            print(f"\n🔄 步骤 {current_step}/{total_steps}: 加载训练好的模型")
+            print(f"从 {args.load_model} 加载模型...")
             model.load(args.load_model)
             # 需要重新加载数据集用于测试
+            print("重新加载数据集用于测试...")
             _, enroll_files, test_files = get_dataset_split(data_path)
-        
+
         # 执行测试
+        current_step += 1
+        print(f"\n🧪 步骤 {current_step}/{total_steps}: 执行模型测试")
         true_labels, predicted_labels, target_scores, imposter_scores = test_model(
             model, test_files, args.model)
-        
+
         # 评估结果
-        print(f"\n{'='*50}")
-        print("评估结果")
+        current_step += 1
+        print(f"\n📊 步骤 {current_step}/{total_steps}: 评估结果和生成报告")
         print(f"{'='*50}")
-        
+        print("📈 最终评估结果")
+        print(f"{'='*50}")
+
         results = print_evaluation_report(
             true_labels, predicted_labels, target_scores, imposter_scores)
         
@@ -244,19 +296,37 @@ def main():
         save_results(results, args.output_dir, args.model)
         
         # 绘制图表
-        if target_scores and imposter_scores:
+        if target_scores and imposter_scores and len(true_labels) > 0:
+            print("\n📊 生成性能分析图表...")
             det_curve_path = os.path.join(args.output_dir, f"{args.model}_det_curve.png")
-            plot_det_curve(target_scores, imposter_scores, 
+            plot_det_curve(target_scores, imposter_scores,
                           f"{args.model.upper()} Model DET Curve", det_curve_path)
-            
+
             score_dist_path = os.path.join(args.output_dir, f"{args.model}_score_distribution.png")
             plot_score_distribution(target_scores, imposter_scores,
-                                  f"{args.model.upper()} Model Score Distribution", 
+                                  f"{args.model.upper()} Model Score Distribution",
                                   score_dist_path)
+        else:
+            print("\n⚠️  跳过图表生成：没有有效的测试结果")
+
+    print(f"\n{'='*60}")
+    print("🎉 程序执行完成！")
+    print(f"📁 结果保存在: {args.output_dir}")
+    print(f"🔧 使用的模型: {args.model.upper()}")
     
-    print(f"\n{'='*50}")
-    print("程序执行完成")
-    print(f"{'='*50}")
+    if args.mode in ['test', 'full'] and 'results' in locals():
+        if len(true_labels) > 0:
+            if 'accuracy' in results:
+                print(f"🎯 识别准确率: {results['accuracy']:.2%}")
+            if 'eer' in results:
+                print(f"📉 等错误率(EER): {results['eer']:.2%}")
+        else:
+            print("❌ 测试失败：没有成功处理的测试样本")
+            print("💡 建议:")
+            print("   1. 检查数据集路径配置")
+            print("   2. 降低GMM组件数量") 
+            print("   3. 增加每个说话人的注册文件数量")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":

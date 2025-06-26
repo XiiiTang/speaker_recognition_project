@@ -106,8 +106,21 @@ class GMMModel(BaseModel):
         if self.ubm is None:
             raise ValueError("UBM未训练，请先调用train方法")
 
+        # 检查特征数量是否足够
+        n_samples = speaker_features.shape[0]
+        if n_samples < self.n_components:
+            print(f"警告: 特征数量({n_samples})少于GMM组件数({self.n_components})，使用适当的组件数")
+            # 动态调整组件数量
+            effective_components = min(self.n_components, max(1, n_samples // 2))
+        else:
+            effective_components = self.n_components
+
         # 使用UBM预测后验概率
         responsibilities = self.ubm.predict_proba(speaker_features)
+        
+        # 如果需要，截取前effective_components个组件
+        if effective_components < self.n_components:
+            responsibilities = responsibilities[:, :effective_components]
 
         # 计算每个高斯分量的统计量
         n_k = np.sum(responsibilities, axis=0)  # 每个分量的软计数
@@ -120,7 +133,7 @@ class GMMModel(BaseModel):
 
         # 创建新的GMM模型，使用UBM的参数初始化
         adapted_gmm = GaussianMixture(
-            n_components=self.n_components,
+            n_components=effective_components,
             covariance_type='diag',  # 固定使用对角协方差
             max_iter=1,
             random_state=self.config.RANDOM_SEED
@@ -129,13 +142,21 @@ class GMMModel(BaseModel):
         # 使用少量数据拟合以初始化参数
         adapted_gmm.fit(speaker_features[:min(100, len(speaker_features))])
 
-        # 复制UBM的参数
-        adapted_gmm.weights_ = np.copy(self.ubm.weights_)
-        adapted_gmm.means_ = np.copy(self.ubm.means_)
-        adapted_gmm.covariances_ = np.copy(self.ubm.covariances_)
+        # 复制UBM的参数（前effective_components个）
+        if effective_components < self.n_components:
+            adapted_gmm.weights_ = self.ubm.weights_[:effective_components].copy()
+            adapted_gmm.means_ = self.ubm.means_[:effective_components].copy()  
+            adapted_gmm.covariances_ = self.ubm.covariances_[:effective_components].copy()
+        else:
+            adapted_gmm.weights_ = self.ubm.weights_.copy()
+            adapted_gmm.means_ = self.ubm.means_.copy()
+            adapted_gmm.covariances_ = self.ubm.covariances_.copy()
+        
+        # 重新归一化权重
+        adapted_gmm.weights_ = adapted_gmm.weights_ / np.sum(adapted_gmm.weights_)
 
         # MAP自适应均值
-        for k in range(self.n_components):
+        for k in range(effective_components):
             if n_k[k] > 0:
                 # 计算该分量的期望统计量
                 weighted_sum = np.sum(responsibilities[:, k:k+1] * speaker_features, axis=0)

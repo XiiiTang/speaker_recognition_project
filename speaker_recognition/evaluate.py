@@ -287,14 +287,28 @@ def print_evaluation_report(true_labels: List[str],
     results = {}
     
     # 计算准确率
-    accuracy = calculate_accuracy(true_labels, predicted_labels)
-    results['accuracy'] = accuracy
+    if len(true_labels) == 0:
+        print("⚠️  警告: 没有成功的测试样本！")
+        results['accuracy'] = 0.0
+        accuracy = 0.0
+    else:
+        accuracy = calculate_accuracy(true_labels, predicted_labels)
+        results['accuracy'] = accuracy
     
     print("=" * 50)
     print("声纹识别系统评估报告")
     print("=" * 50)
     print(f"总测试样本数: {len(true_labels)}")
-    print(f"识别准确率: {accuracy:.2%}")
+    
+    if len(true_labels) == 0:
+        print("❌ 识别准确率: 无法计算（没有成功的测试样本）")
+        print("\n可能的原因:")
+        print("1. 所有说话人注册失败")
+        print("2. 测试文件处理失败")
+        print("3. 数据集路径配置错误")
+        return results
+    else:
+        print(f"识别准确率: {accuracy:.2%}")
     
     # 计算EER（如果提供了分数）
     if target_scores and imposter_scores:
@@ -304,15 +318,18 @@ def print_evaluation_report(true_labels: List[str],
         print(f"等错误率(EER): {eer:.2%}")
         print(f"EER对应阈值: {eer_threshold:.4f}")
     
-    # 打印分类报告
-    print("\n详细分类报告:")
-    print(classification_report(true_labels, predicted_labels))
+    # 打印分类报告（仅当有测试样本时）
+    if len(true_labels) > 0 and len(set(true_labels)) > 0:
+        print("\n详细分类报告:")
+        print(classification_report(true_labels, predicted_labels))
+        
+        # 混淆矩阵统计
+        cm = generate_confusion_matrix(true_labels, predicted_labels)
+        results['confusion_matrix'] = cm
+        print(f"\n混淆矩阵形状: {cm.shape}")
+    else:
+        print("\n无法生成详细分类报告：没有有效的测试样本")
     
-    # 混淆矩阵统计
-    cm = generate_confusion_matrix(true_labels, predicted_labels)
-    results['confusion_matrix'] = cm
-    
-    print(f"\n混淆矩阵形状: {cm.shape}")
     print("=" * 50)
     
     return results
